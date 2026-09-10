@@ -1,168 +1,132 @@
-# Binaire — Machine Learning Assessment
+# Binaire ML Assessment
 
-Three tasks, all in Python:
+My submission for the Binaire machine learning assessment. The brief has three tasks, and each one is a script:
 
-| Task | What it does | Entry point |
-|---|---|---|
-| 1. HF API | Follows [huggingface.co/freznelai](https://huggingface.co/freznelai) and downloads both FreznelAI models using only the `huggingface_hub` Python library (no CLI) | `hf_task.py` |
-| 2. Scraping | Builds `data/games.csv` from the 100 newest carts on the [PICO-8 BBS cartridge listing](https://www.lexaloffle.com/bbs/?cat=7&carts_tab=1&#sub=2&mode=carts) | `scrape.py` |
-| 3. RAG | Turns the dataset into a queryable vector database that generates PICO-8 code (CLI + web UI) | `rag.py`, `app.py` |
+- `hf_task.py` follows the [freznelai](https://huggingface.co/freznelai) org on Hugging Face and downloads their two face models, using only the Python `huggingface_hub` library.
+- `scrape.py` scrapes the 100 newest carts from the [PICO-8 BBS](https://www.lexaloffle.com/bbs/?cat=7&carts_tab=1&#sub=2&mode=carts) into `data/games.csv`.
+- `rag.py` turns that CSV into a vector database you can query, and uses it to generate PICO-8 code.
+
+There's also a small web UI on top of the RAG part: `streamlit_app.py` (the one deployed on Streamlit Cloud), or `app.py` if you'd rather use Gradio.
+
+Everything is Python 3.11.
 
 ## Setup
 
-Requires Python 3.11+.
-
-```bash
+```
 python -m venv .venv
-.venv\Scripts\activate            # Windows  (macOS/Linux: source .venv/bin/activate)
-pip install -r requirements.txt   # includes the HF API: huggingface_hub
-copy .env.example .env            # macOS/Linux: cp .env.example .env
+.venv\Scripts\activate          # mac/linux: source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Fill in `.env` (it is git-ignored):
+Copy `.env.example` to `.env` and fill it in:
 
-| Variable | Needed for | How to get it |
-|---|---|---|
-| `HF_TOKEN` | Task 1 (the follow acts as your account) | huggingface.co → Settings → Access Tokens → **Write** token |
-| `GROQ_API_KEY` | `rag.py ask` and the web UI | console.groq.com → API Keys |
-| `LLM_MODEL` | optional | any Groq-served model; default `openai/gpt-oss-120b` |
+- `HF_TOKEN`: a Hugging Face token with write access. You only need it for task 1, because following an org has to be done as a logged-in user.
+- `GROQ_API_KEY`: used for code generation. A free key from https://console.groq.com/keys is enough.
+- `LLM_MODEL`: optional. Defaults to `openai/gpt-oss-120b`.
 
-## Task 1 — Hugging Face API
+## Task 1: Hugging Face
 
-```bash
+```
 python hf_task.py
 ```
 
-1. Validates the token (`HfApi.whoami`).
-2. Follows the `freznelai` organization. `huggingface_hub` has no follow method, so the script sends the Hub's own
-   follow request (`POST /api/organizations/freznelai/follow`, the endpoint behind the website's *Follow* button)
-   through the library's HTTP session (`get_session`, `build_hf_headers`, `hf_raise_for_status`). It then confirms
-   the result with `HfApi.get_organization_overview(...).is_following`.
-3. Downloads both models with `snapshot_download` into `models/<repo name>/`, and checks every file's size against
-   `HfApi.model_info(files_metadata=True)`:
-   - `freznelai/FreznelAI_1.0_Face-Detector_500M_FZFP4_FRZm`
-   - `freznelai/FreznelAI_1.0_Face-Landmarker_500M_FZFP4_FRZm`
+It logs in with your token, follows freznelai, and checks that the follow actually went through. Then it downloads both models into `models/` and compares every file's size with what the Hub reports, so a truncated download gets caught.
 
-Exits non-zero if any step can't be verified.
+`huggingface_hub` has no function for following someone. I checked the latest release and the Hub's public API docs, and neither has one. The Follow button on the website sends `POST /api/organizations/<org>/follow`, so the script sends that same request through the library's own session and auth headers. It then reads `is_following` back from `get_organization_overview()` to confirm the follow worked.
 
-## Task 2 — Scraping the PICO-8 BBS
+## Task 2: Scraping the BBS
 
-```bash
-python scrape.py        # ~15 s; re-runs are served from .cache/ (delete it to re-scrape)
+```
+python scrape.py
 ```
 
-Output: `data/games.csv` (100 rows) and `data/artwork/<cart_id>.p8.png`.
+It takes about 15 seconds and produces `data/games.csv` plus the cart images in `data/artwork/`. Pages are cached in `.cache/`, so running it again is instant and doesn't hit the site. Delete that folder if you want fresh data.
 
-| Column | Content |
+What's in the CSV:
+
+| column | what it is |
 |---|---|
-| `rank` | position in the listing (1 = newest) |
-| `tid` | BBS thread id |
-| `cart_id` | Lexaloffle cart id (e.g. `petal_quest-12`) |
-| `game_name` | name of the game |
-| `author` | author's BBS username |
-| `artwork_url` / `artwork_path` | the cartridge image (the game's label art) online / local copy |
-| `license` | e.g. `CC4-BY-NC-SA`, or `No License` as labelled on the site |
+| `rank` | position in the listing, 1 is the newest |
+| `tid` | the BBS thread id |
+| `cart_id` | Lexaloffle's id for the cart, e.g. `petal_quest-12` |
+| `game_name`, `author` | the game's name and the author's username |
+| `artwork_url`, `artwork_path` | the cartridge image (which is the game's label art), online and saved locally |
+| `license` | usually `CC4-BY-NC-SA`, or `No License` when the page says so |
 | `like_count` | stars on the release post |
-| `description` | text of the release post (empty when the author wrote none) |
-| `code` | full Lua source decoded from the cart |
-| `top_comments` | JSON list of up to 5 comments `{author, stars, date, text}`, most-starred first (ties → earliest) |
-| `thread_url` | link to the thread |
-| `scraped_at` | UTC timestamp of the run (the listing is newest-first, so it is a snapshot) |
+| `description` | the text of the release post; some authors don't write one |
+| `code` | the full Lua source of the game |
+| `top_comments` | up to 5 comments as JSON (`author`, `stars`, `date`, `text`), most starred first |
+| `thread_url`, `scraped_at` | link to the thread, and when the scrape ran |
 
-**How it works**
+This part turned out to be less straightforward than it looked. Here's what I ran into:
 
-- **Listing.** The brief's URL builds its grid with JavaScript from `bbs/lister.php?…&sub=2&mode=carts&page=N`
-  (30 carts per page, "New Carts" order). The scraper reads that endpoint directly and de-duplicates thread ids,
-  so carts posted mid-run can't shift pages into duplicates or gaps.
-- **Threads.** Every post is a `div#p<id>` with its own star button. The first post is the release: name, author,
-  license, likes, description. The rest are comments, and paginated threads are followed across all pages.
-- **Game code.** The code is not in the HTML: PICO-8 stores the whole cartridge inside the `.p8.png` image, and
-  the site decodes it in the browser with WebAssembly. `p8cart.py` does this in pure Python:
-  1. It reads the hidden byte stored in the low 2 bits of each pixel's ARGB channels.
-  2. It decompresses the code section, supporting both the current `pxa` format and the legacy `:c:` format.
-  3. It maps PICO-8's glyph bytes (e.g. ⬅️ ❎) to Unicode.
+- **The link in the brief doesn't contain the games.** That page builds its grid with JavaScript. The actual data comes from `bbs/lister.php` (30 carts per page, newest first), so the scraper calls that directly.
+- **The game code isn't on the page either.** PICO-8 stores the whole cartridge inside the PNG image, two bits per colour channel, and the site decodes it in your browser with WebAssembly. No Python package does this, so I wrote `p8cart.py`. It pulls the bytes out of the image and decompresses the code, and it handles both the current compression format and the older pre-2020 one. I compared its output with Lexaloffle's own code viewer on three carts (a new one, an old one, and one full of button glyphs) and they match exactly. Those checks are in `tests/test_p8cart.py`.
+- **Old carts are stored somewhere else.** Carts with plain numeric ids, like Celeste (`15133`), live in a different folder from newer ones. So the scraper takes the image link from the thread page instead of building the URL itself.
+- **The cart player looks like a post.** Posts are `div#p<id>`, but the embedded player is `div#p<cart_id>`, which for numeric carts looks exactly like a post. A post only counts if it has its own like button.
+- **"No License" is a real answer.** 35 of the 100 carts show "No License" on the page, so that's what goes in the column instead of leaving it blank.
+- **The list moves while you scrape it.** It's newest first, so a new post during a run can push a cart onto the next page. Thread ids are deduplicated, so nothing gets counted twice or skipped.
 
-  Its output matches Lexaloffle's own viewer exactly on new-format, legacy-format and glyph-heavy carts (see
-  `tests/test_p8cart.py`).
-- **Efficiency.** Pages are fetched by 4 parallel workers through a pooled session with automatic retry/backoff on
-  429/5xx. The whole run is about 210 requests in about 15 s. A disk cache makes re-runs free and polite.
-- **Safety net.** The CSV is written only if all 100 rows have a name, author, cart, license, code and artwork file.
-  Otherwise the failing games are listed and the script exits non-zero.
+The scraper won't write the CSV unless all 100 rows have a name, author, license, code and artwork. If anything fails, it prints which games failed and exits with an error.
 
-## Task 3 — RAG database
+## Task 3: The RAG database
 
-```bash
-python rag.py build                                  # ~1 min: embeds 100 overviews + ~1.6K code chunks into chroma/
-python rag.py search "platformer with double jump"   # query the database (no API key needed)
-python rag.py ask "make a snake game" --out snake.p8 # retrieve + generate a runnable PICO-8 cart
-python app.py                                        # web UI at http://127.0.0.1:7860
+```
+python rag.py build                                    # takes about a minute
+python rag.py search "platformer with double jump"     # searches the database only, no API key needed
+python rag.py ask "make a snake game" --out snake.p8   # generates a cart
 ```
 
-- **Database:** ChromaDB, stored on disk in `chroma/`. It uses Chroma's built-in local `all-MiniLM-L6-v2` ONNX
-  embeddings, so no key is needed; the model (~80 MB) is downloaded once on the first build.
-- **Documents:** per game, one *overview* (name, author, license, likes, description, top comments), plus the code
-  split at top-level function boundaries into chunks of up to 1,500 characters. Each chunk is tagged with its game,
-  author, license and URL.
-- **Generation:** the top matches go into the prompt, alongside a PICO-8 primer (screen, palette, game loop, input,
-  API, dialect limits). The prompt is sent to `openai/gpt-oss-120b` on Groq, called through
-  `huggingface_hub.InferenceClient(provider="groq")`. The retrieved context is capped at about 3.5K tokens so each
-  request fits Groq's free tier (8K tokens/minute).
-- **Output:** one complete Lua program, the source games it drew on (with their licenses), and optionally a `.p8`
-  file you can load in PICO-8 0.2.6+ or paste into the free web version (Education Edition).
-- **Web UI:** *Generate* shows the code, notes, sources and a downloadable `.p8` file. *Search only* shows the
-  ranked database matches.
+How it works:
 
-### Streamlit app (local or Streamlit Community Cloud)
+1. **Documents.** Each game becomes one overview document (description, license, likes, top comments). Its code is split into chunks of up to 1,500 characters, cut at function boundaries so functions stay whole where they fit. That gives about 1,700 documents in total.
+2. **Search.** They go into ChromaDB using its built-in MiniLM embeddings. Those run locally, so building and searching don't need a key.
+3. **Generation.** For `ask`, the closest matches go into the prompt along with a short PICO-8 cheat sheet: the screen size, the palette, the button numbers, the functions PICO-8 has, and the parts of normal Lua it doesn't have. The prompt goes to gpt-oss-120b on Groq, via `huggingface_hub.InferenceClient`.
+4. **Output.** You get a complete program, the games it drew from (with their licenses), and optionally a `.p8` file that PICO-8 can open directly.
 
-```bash
-streamlit run streamlit_app.py      # http://localhost:8501
+I capped the retrieved context at about 3.5K tokens because Groq's free tier allows 8K tokens per minute. That works out to roughly one request a minute, which is fine for trying it out.
+
+## Web UI
+
+```
+streamlit run streamlit_app.py     # http://localhost:8501
+python app.py                      # same thing in Gradio, http://127.0.0.1:7860
 ```
 
-`streamlit_app.py` is the same Generate / Search UI in Streamlit. On a fresh deploy it builds `chroma/` on first
-start (about 1–2 minutes), then caches it. On Streamlit Community Cloud:
+Describe the game you want and hit Generate. You get the code, the sources, and a button to download the `.p8`. "Search only" shows what the database found without calling the model.
 
-- Set the main file to `streamlit_app.py` and Python to 3.11.
-- Put `GROQ_API_KEY = "..."` in the app's **Secrets**. No HF token is needed there.
+To deploy on Streamlit Community Cloud:
+- Point it at `streamlit_app.py`.
+- Pick Python 3.11.
+- Add `GROQ_API_KEY = "..."` under Secrets.
 
-`requirements.txt` installs `pysqlite3-binary` on Linux only, because Chroma needs a newer SQLite than some cloud
-images ship.
+The database is built the first time the app starts, which takes a minute or two. `requirements.txt` also pulls in `pysqlite3-binary` on Linux, because Chroma needs a newer SQLite than Streamlit's servers have shipped with in the past.
 
 ## Tests
 
-```bash
+```
 python -m pytest
 ```
 
-19 tests, run against saved fixtures:
-- **Decoder:** fingerprints captured from Lexaloffle's official in-browser decoder.
-- **Parsers:** listing, a thread with comments, a thread without comments, and a thread with no license.
-- **RAG:** the chunker, document building, the context budget, and the `.p8` writer.
+There are 19 tests. They run against saved pages and cart images in `tests/fixtures/`, so they don't need network access.
 
-## Project layout
+## Layout
 
 ```
-hf_task.py    Task 1
-p8cart.py     .p8.png → Lua decoder
-scrape.py     Task 2
-rag.py        Task 3 (build / search / ask)
-app.py        Task 3 web UI (Gradio)
-streamlit_app.py  Task 3 web UI (Streamlit, for Streamlit Community Cloud)
-data/         games.csv + artwork (committed)
-tests/        pytest suite + fixtures
-docs/         design and implementation plan
+hf_task.py          task 1
+p8cart.py           cart image -> Lua decoder
+scrape.py           task 2
+rag.py              task 3 (build / search / ask)
+streamlit_app.py    web UI (Streamlit)
+app.py              web UI (Gradio)
+data/               the dataset and cart images
+tests/              tests and fixtures
+docs/               design notes
 ```
 
-Generated or local only (git-ignored): `.env`, `.venv/`, `models/`, `chroma/`, `.cache/`, `*.p8`.
+## Limitations
 
-## Notes and limitations
-
-- **Snapshot.** The listing is newest-first, so re-scraping later gives a different 100 games. The committed CSV
-  is the snapshot taken at `scraped_at`.
-- **Excel.** Excel truncates cells longer than 32,767 characters, and 24 carts have more code than that. The CSV
-  itself is complete: pandas, LibreOffice and Python's `csv` module read it fully.
-- **Control bytes.** Cart code keeps PICO-8's print control bytes (0x01–0x0F) exactly as stored in the cart.
-- **Generated code.** It is not executed or validated automatically. Run it in PICO-8 to check it.
-- **Scraping etiquette.** Scraping follows lexaloffle.com's `robots.txt`, which allows general crawling and
-  disallows AI *training* (`ai-train=no`). This project only retrieves content at query time and trains nothing.
-- **Groq free tier.** The free tier allows roughly one `ask` per minute. A rate-limit error names the limit; wait
-  and retry.
+- **The dataset is a snapshot.** The listing changes every day, so running the scraper again later gives different games. `scraped_at` tells you when this one was taken.
+- **Excel cuts off long code.** Excel caps a cell at 32,767 characters, and 24 of the carts have more code than that. The CSV itself is complete, and pandas or LibreOffice read it fine.
+- **Generated code isn't tested automatically.** Treat it as a starting point and run it in PICO-8.
+- **The carts are used for retrieval only, not training.** Lexaloffle's robots.txt allows crawling but opts out of AI training, and nothing here trains a model.

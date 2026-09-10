@@ -1,4 +1,4 @@
-"""Task 3: RAG database over the scraped PICO-8 dataset — build it, search it, and generate PICO-8 code."""
+"""Task 3: a RAG database over the scraped carts. Builds the vector db, searches it, and generates PICO-8 code."""
 import argparse
 import csv
 import json
@@ -12,11 +12,14 @@ CSV_PATH = ROOT / "data" / "games.csv"
 DB_PATH = ROOT / "chroma"
 COLLECTION = "pico8_games"
 CHUNK_LIMIT = 1500
-CONTEXT_BUDGET = 12_000  # chars (~3.5K tokens) so prompt + 3K output stays under Groq's 8K tokens/min free tier
+# ~3.5K tokens of context. with 3K tokens for the answer that stays under groq's free tier cap of 8K tokens/min
+CONTEXT_BUDGET = 12_000
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 
-csv.field_size_limit(2**31 - 1)  # some carts exceed the 128K default; sys.maxsize overflows on Windows
+# the biggest carts go past csv's default 128K field limit. sys.maxsize would overflow on windows
+csv.field_size_limit(2**31 - 1)
 
+# unindented "function foo(" or "foo = function(", i.e. where a new top-level function starts
 FUNC_START = re.compile(r"^(?:local\s+)?function\b|^[\w.:\[\]\"']+\s*=\s*function\b")
 
 SYSTEM_PROMPT = """You are an expert PICO-8 game developer. You write code for the PICO-8 fantasy console (its Lua dialect).
@@ -36,10 +39,14 @@ Rules:
 - Use the reference snippets for idioms and API usage; do not copy them wholesale."""
 
 
-# ---------- documents ----------
+# --- documents ---
 
 def chunk_code(code: str, header: str, limit: int = CHUNK_LIMIT) -> list[str]:
-    """Split at top-level function starts, split oversized blocks on lines, then pack up to `limit` chars."""
+    """Splits code into chunks of at most `limit` chars, each starting with `header`.
+
+    Cuts happen at top-level functions so a function usually stays in one piece. Anything
+    longer than the limit gets split by lines, then small neighbouring pieces are packed together.
+    """
     blocks, cur = [], []
     for line in code.split("\n"):
         if cur and FUNC_START.match(line):
@@ -56,7 +63,7 @@ def chunk_code(code: str, header: str, limit: int = CHUNK_LIMIT) -> list[str]:
             continue
         part = ""
         for line in block.split("\n"):
-            while len(line) > limit:  # e.g. a long embedded data string
+            while len(line) > limit:  # some carts keep sprite or level data in one giant string
                 if part:
                     pieces.append(part)
                     part = ""
@@ -83,6 +90,8 @@ def chunk_code(code: str, header: str, limit: int = CHUNK_LIMIT) -> list[str]:
 
 
 def load_docs(csv_path: Path = CSV_PATH) -> list[dict]:
+    # every game gives one "overview" doc (what it is, what people said about it) plus its code chunks.
+    # chroma only accepts str/int/float/bool metadata, so empty values stay as "" and never None
     docs = []
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
@@ -111,9 +120,10 @@ def load_docs(csv_path: Path = CSV_PATH) -> list[dict]:
     return docs
 
 
-# ---------- vector database ----------
+# --- vector database ---
 
 def _client():
+    # imported here so the chunking code and its tests don't need chroma loaded
     import chromadb
     from chromadb.config import Settings
 
@@ -121,6 +131,7 @@ def _client():
 
 
 def build(csv_path: Path = CSV_PATH) -> dict:
+    """Rebuilds the collection from scratch, so running it twice never leaves duplicates."""
     docs = load_docs(csv_path)
     client = _client()
     if COLLECTION in [c.name for c in client.list_collections()]:
@@ -136,7 +147,7 @@ def build(csv_path: Path = CSV_PATH) -> dict:
 
 
 def ensure_built() -> bool:
-    """Build the database if it doesn't exist yet (fresh cloud deploys). Returns True if a build ran."""
+    """Builds the database only if it isn't there yet, e.g. the first start after a cloud deploy."""
     if COLLECTION in [c.name for c in _client().list_collections()]:
         return False
     build()
@@ -154,9 +165,11 @@ def search(query: str, k: int = 8) -> list[dict]:
     ]
 
 
-# ---------- generation ----------
+# --- generation ---
 
 def build_context(hits: list[dict], budget: int = CONTEXT_BUDGET) -> tuple[str, list[dict]]:
+    # takes hits in ranked order until the budget runs out. each snippet is labelled with its
+    # game, author and license so the sources can be credited in the answer
     blocks, sources, used = [], [], 0
     for n, h in enumerate(hits, 1):
         m = h["meta"]
@@ -171,12 +184,13 @@ def build_context(hits: list[dict], budget: int = CONTEXT_BUDGET) -> tuple[str, 
 
 
 def extract_code(answer: str) -> str:
+    # first fenced code block in the reply, or the whole reply if the model skipped the fences
     m = re.search(r"```[^\n]*\n(.*?)```", answer, re.S)
     return (m.group(1) if m else answer).strip()
 
 
 def ask(query: str, k: int = 6) -> tuple[str, str, list[dict]]:
-    """Retrieve relevant cart snippets and have the LLM write a PICO-8 program. Returns (answer, code, sources)."""
+    """Finds relevant snippets and asks the model for a PICO-8 program. Returns (answer, code, sources)."""
     from huggingface_hub import InferenceClient
 
     key = os.environ.get("GROQ_API_KEY", "").strip()
@@ -187,6 +201,7 @@ def ask(query: str, k: int = 6) -> tuple[str, str, list[dict]]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Reference snippets from real PICO-8 carts:\n\n{context}\n\nRequest: {query}"},
     ]
+    # with a groq key (not an hf_ token) InferenceClient talks to groq's api directly
     resp = InferenceClient(provider="groq", api_key=key).chat_completion(
         messages=messages,
         model=os.environ.get("LLM_MODEL", "").strip() or DEFAULT_MODEL,
@@ -199,6 +214,7 @@ def ask(query: str, k: int = 6) -> tuple[str, str, list[dict]]:
 
 
 def p8_text(code: str) -> str:
+    # minimal .p8 file: just the header and the code section, PICO-8 fills in the rest as empty
     return f"pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n{code.rstrip()}\n"
 
 
@@ -208,7 +224,7 @@ def write_p8(code: str, path) -> Path:
     return path
 
 
-# ---------- CLI ----------
+# --- cli ---
 
 def main(argv=None) -> int:
     from dotenv import load_dotenv
@@ -238,7 +254,7 @@ def main(argv=None) -> int:
         else:
             try:
                 answer, code, sources = ask(args.query, args.k)
-            except Exception as e:
+            except Exception as e:  # e.g. rate limited. still show what the search found
                 print(f"Generation failed: {type(e).__name__}: {e}\nClosest matches in the database:")
                 for h in search(args.query, args.k):
                     print(f"  - {h['meta']['game_name']} by {h['meta']['author']} ({h['meta']['kind']}) {h['meta']['thread_url']}")
@@ -249,7 +265,7 @@ def main(argv=None) -> int:
                 print(f"  - {src['game_name']} by {src['author']} ({src['license']}) {src['thread_url']}")
             if args.out:
                 print(f"\nWrote {write_p8(code, args.out)}")
-    except Exception as e:  # CLI boundary: show a readable error instead of a traceback
+    except Exception as e:  # print something readable instead of a traceback
         print(f"Error: {type(e).__name__}: {e}")
         return 1
     return 0

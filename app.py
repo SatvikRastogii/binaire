@@ -1,4 +1,4 @@
-"""Web UI for the PICO-8 RAG database. Run `python app.py`, then open http://127.0.0.1:7860."""
+"""Gradio version of the web UI. Run `python app.py` and open http://127.0.0.1:7860."""
 import re
 import tempfile
 from pathlib import Path
@@ -22,9 +22,9 @@ def generate(prompt: str, k: float):
         raise gr.Error("Enter a request, e.g. 'make a snake game'.")
     try:
         answer, code, sources = rag.ask(prompt.strip(), int(k))
-    except Exception as e:  # UI boundary: show the message instead of crashing
+    except Exception as e:  # show it as a popup in the UI instead of crashing
         raise gr.Error(f"{type(e).__name__}: {e}")
-    notes = re.sub(r"```.*?```", "", answer, flags=re.S).strip()
+    notes = re.sub(r"```.*?```", "", answer, flags=re.S).strip()  # the model's notes without the code block
     p8 = rag.write_p8(code, Path(tempfile.mkdtemp()) / "generated.p8")
     return code, notes, _sources_md(sources), str(p8)
 

@@ -1,4 +1,4 @@
-"""Task 2: scrape the 100 newest PICO-8 carts from the Lexaloffle BBS into data/games.csv."""
+"""Task 2: scrapes the 100 newest PICO-8 carts from the Lexaloffle BBS into data/games.csv."""
 import copy
 import csv
 import hashlib
@@ -19,7 +19,8 @@ from urllib3.util.retry import Retry
 from p8cart import cart_code
 
 BASE = "https://www.lexaloffle.com/bbs/"
-# The brief's URL (…/bbs/?cat=7&carts_tab=1&#sub=2&mode=carts) loads its grid from this endpoint.
+# the link in the brief (bbs/?cat=7&carts_tab=1&#sub=2&mode=carts) fills its grid with JS,
+# and this is where that JS gets the data from. 30 carts per page, newest first
 LISTING_URL = BASE + "lister.php?use_hurl=1&cat=7&sub=2&mode=carts&page={page}"
 THREAD_URL = BASE + "?tid={tid}"
 THREAD_PAGE_URL = BASE + "?page={page}&tid={tid}"
@@ -35,9 +36,10 @@ COLUMNS = [
 ]
 
 
-# ---------- HTTP ----------
+# --- http ---
 
 def make_session() -> requests.Session:
+    # retries with backoff on rate limits and server errors instead of failing the whole run
     s = requests.Session()
     s.headers["User-Agent"] = USER_AGENT
     retry = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
@@ -46,7 +48,7 @@ def make_session() -> requests.Session:
 
 
 def fetch(session: requests.Session, url: str) -> bytes:
-    """GET with an on-disk cache so re-runs don't hit the site again (delete .cache/ to refresh)."""
+    """GET with a simple disk cache, so running the script again doesn't hit the site. Delete .cache/ to re-scrape."""
     path = CACHE_DIR / hashlib.sha1(url.encode()).hexdigest()
     if path.exists():
         return path.read_bytes()
@@ -57,7 +59,7 @@ def fetch(session: requests.Session, url: str) -> bytes:
     return resp.content
 
 
-# ---------- parsing ----------
+# --- parsing ---
 
 def parse_listing(html: str) -> list[tuple[int, str]]:
     soup = BeautifulSoup(html, "lxml")
@@ -69,7 +71,8 @@ def parse_listing(html: str) -> list[tuple[int, str]]:
 
 
 def _posts(soup: BeautifulSoup) -> list:
-    # A post is div#p<pid> holding its own like button; cart players also use id="p<cart_id>", so the button check matters.
+    # posts are div#p<pid>, but the embedded cart player is div#p<cart_id>, and for old numeric
+    # carts (e.g. p15133) that looks exactly like a post. only real posts have their own like button
     return [
         d for d in soup.find_all("div", id=re.compile(r"^p\d+$"))
         if d.select_one(f".rate_{d['id'][1:]}_like")
@@ -77,6 +80,8 @@ def _posts(soup: BeautifulSoup) -> list:
 
 
 def _clean_text(el) -> str:
+    # works on a copy so the original tree stays intact for the other fields.
+    # removes the cart player and embed widgets, keeps paragraph breaks as newlines
     el = copy.copy(el)
     player = el.select_one('[class^="playarea_"]')
     if player is not None:
@@ -92,6 +97,8 @@ def _clean_text(el) -> str:
 
 
 def _body(post):
+    # a post with a cart keeps its text next to the cart widget, a plain comment has it
+    # in the div right after the author/date line
     src = post.select_one('[id^="cartsrc_"]')
     if src is not None:
         return src.parent
@@ -115,7 +122,7 @@ def parse_post(post) -> dict:
 
 
 def parse_thread(html: str) -> dict:
-    """Page 1 of a cart thread: the first post is the cart release, the rest are comments."""
+    """First page of a thread. The first post is the cart release, everything after it is a comment."""
     soup = BeautifulSoup(html, "lxml")
     posts = _posts(soup)
     if not posts:
@@ -127,6 +134,7 @@ def parse_thread(html: str) -> dict:
     cart_id = cartsrc["id"][len("cartsrc_"):] if cartsrc else ""
     cart_link = op.select_one(f'a[href$="/{cart_id}.p8.png"]') if cart_id else None
     player = op.select_one('[class^="playarea_"]')
+    # the bar under the player reads "... | Code | Embed | License: CC4-BY-NC-SA" or "... | No License"
     info = player.parent.get_text(" ", strip=True) if player is not None else ""
     lic = re.search(r"License:\s*(\S+)|\b(No License)\b", info)
     pages = [int(m) for a in soup.select('a[href*="page="][href*="tid="]') for m in re.findall(r"page=(\d+)", a["href"])]
@@ -145,12 +153,12 @@ def parse_thread(html: str) -> dict:
 
 
 def parse_comments(html: str) -> list[dict]:
-    """Pages 2..n of a thread: every post is a comment."""
+    """Pages 2 and up of a long thread, where every post is a comment."""
     return [parse_post(p) for p in _posts(BeautifulSoup(html, "lxml"))]
 
 
 def top_comments(comments: list[dict], n: int = 5) -> list[dict]:
-    """Most-starred first; ties keep thread order (earliest first). Duplicate pids are dropped."""
+    """Top n comments by stars. sorted() is stable, so ties stay in thread order (oldest first)."""
     seen, unique = set(), []
     for c in comments:
         if c["pid"] not in seen:
@@ -160,9 +168,11 @@ def top_comments(comments: list[dict], n: int = 5) -> list[dict]:
     return [{k: c[k] for k in ("author", "stars", "date", "text")} for c in ranked]
 
 
-# ---------- pipeline ----------
+# --- pipeline ---
 
 def collect_listing(session: requests.Session, n: int) -> list[tuple[int, str]]:
+    # the listing is newest first, so if someone posts while this runs, a cart can slide onto
+    # the next page and show up twice. dedupe by thread id and keep going until there are n
     seen, games = set(), []
     for page in range(1, 20):
         new = [(tid, t) for tid, t in parse_listing(fetch(session, LISTING_URL.format(page=page)).decode("utf-8", "replace")) if tid not in seen]
@@ -239,13 +249,13 @@ def main() -> int:
             rank, tid, title = jobs[job]
             try:
                 rows.append(job.result())
-            except Exception as e:  # report every failing game, then fail validation below
+            except Exception as e:  # don't stop at the first bad game, collect them all and report at the end
                 failures.append(f"rank {rank} tid {tid} {title!r}: {type(e).__name__}: {e}")
     rows.sort(key=lambda r: r["rank"])
 
     errors = failures + validate(rows)
     if errors:
-        print("FAILED — CSV not written:")
+        print("FAILED, CSV not written:")
         print("\n".join(f"  {e}" for e in errors))
         return 1
 

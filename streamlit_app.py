@@ -1,10 +1,11 @@
-"""Streamlit front end for the PICO-8 RAG database. Run locally with `streamlit run streamlit_app.py`."""
+"""Streamlit version of the web UI (the one deployed on Streamlit Cloud). Locally: `streamlit run streamlit_app.py`."""
 import os
 import re
 import sys
 
-# Chroma needs sqlite3 >= 3.35; Streamlit Community Cloud's system sqlite can be older, so use the
-# bundled pysqlite3-binary when it is installed (Linux only, see requirements.txt).
+# chroma refuses to start on sqlite older than 3.35, which streamlit cloud has shipped before.
+# this swaps in pysqlite3-binary when it's installed (linux only, see requirements.txt).
+# it has to run before chroma gets imported
 try:
     __import__("pysqlite3")
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
@@ -17,11 +18,11 @@ from dotenv import load_dotenv
 import rag
 
 load_dotenv(rag.ROOT / ".env")
-try:  # Streamlit Cloud: keys come from the app's Secrets settings
+try:  # on streamlit cloud the key comes from the app's Secrets page
     for key in ("GROQ_API_KEY", "LLM_MODEL"):
         if key in st.secrets and not os.environ.get(key):
             os.environ[key] = str(st.secrets[key])
-except FileNotFoundError:  # no secrets.toml locally; .env is used instead
+except FileNotFoundError:  # running locally without secrets.toml, .env covers it
     pass
 
 
@@ -49,7 +50,7 @@ elif generate:
         try:
             answer, code, sources = rag.ask(prompt.strip(), k)
             st.session_state.result = {"kind": "generate", "answer": answer, "code": code, "sources": sources}
-        except Exception as e:  # UI boundary: show the message instead of a stack trace
+        except Exception as e:  # show the error on the page instead of a stack trace
             st.session_state.result = {"kind": "error", "message": f"{type(e).__name__}: {e}"}
 elif search_only:
     try:
@@ -57,7 +58,8 @@ elif search_only:
     except Exception as e:
         st.session_state.result = {"kind": "error", "message": f"{type(e).__name__}: {e}"}
 
-# Rendered from session state so the result survives reruns (e.g. clicking the download button).
+# streamlit reruns the whole script on every click (including the download button), so the
+# last result lives in session_state and gets drawn from there
 result = st.session_state.get("result")
 if result and result["kind"] == "error":
     st.error(result["message"])

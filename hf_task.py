@@ -1,4 +1,4 @@
-"""Task 1: follow the freznelai organization and download its two models, using only the HF Python API."""
+"""Task 1: follows the freznelai org and downloads its two models, using only the huggingface_hub library."""
 import os
 import sys
 from pathlib import Path
@@ -17,12 +17,14 @@ MODELS_DIR = Path("models")
 
 
 def follow_org(api: HfApi, token: str, org: str) -> None:
-    # huggingface_hub has no follow method; this is the Hub endpoint the website's Follow button uses.
+    # huggingface_hub doesn't have a follow() method, so this sends the same request the
+    # Follow button on the website sends, through the library's own session and auth headers
     resp = get_session().post(
         f"{constants.ENDPOINT}/api/organizations/{org}/follow",
         headers=build_hf_headers(token=token),
     )
     hf_raise_for_status(resp)
+    # a 200 alone isn't proof, so ask the hub whether we're actually following now
     if not api.get_organization_overview(org, token=token).is_following:
         raise RuntimeError(f"Follow request succeeded but Hub reports is_following=False for {org}")
 
@@ -30,6 +32,7 @@ def follow_org(api: HfApi, token: str, org: str) -> None:
 def download_and_verify(api: HfApi, token: str, repo_id: str) -> bool:
     local_dir = MODELS_DIR / repo_id.split("/")[1]
     snapshot_download(repo_id, local_dir=local_dir, token=token)
+    # compare each file with the size the hub reports, catches partial downloads
     ok = True
     for sib in api.model_info(repo_id, files_metadata=True, token=token).siblings:
         path = local_dir / sib.rfilename
