@@ -112,6 +112,21 @@ python app.py                                        # web UI at http://127.0.0.
 - **Web UI:** *Generate* shows the code, notes, sources and a downloadable `.p8` file. *Search only* shows the
   ranked database matches.
 
+### Streamlit app (local or Streamlit Community Cloud)
+
+```bash
+streamlit run streamlit_app.py      # http://localhost:8501
+```
+
+`streamlit_app.py` is the same Generate / Search UI in Streamlit. On a fresh deploy it builds `chroma/` on first
+start (about 1–2 minutes), then caches it. On Streamlit Community Cloud:
+
+- Set the main file to `streamlit_app.py` and Python to 3.11.
+- Put `GROQ_API_KEY = "..."` in the app's **Secrets**. No HF token is needed there.
+
+`requirements.txt` installs `pysqlite3-binary` on Linux only, because Chroma needs a newer SQLite than some cloud
+images ship.
+
 ## Tests
 
 ```bash
@@ -130,7 +145,8 @@ hf_task.py    Task 1
 p8cart.py     .p8.png → Lua decoder
 scrape.py     Task 2
 rag.py        Task 3 (build / search / ask)
-app.py        Task 3 web UI
+app.py        Task 3 web UI (Gradio)
+streamlit_app.py  Task 3 web UI (Streamlit, for Streamlit Community Cloud)
 data/         games.csv + artwork (committed)
 tests/        pytest suite + fixtures
 docs/         design and implementation plan
