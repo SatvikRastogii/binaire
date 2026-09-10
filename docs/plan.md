@@ -44,7 +44,7 @@
 
 ### Task 3: Cart decoder (`p8cart.py`)
 
-**Files:** Create `p8cart.py`, `tests/test_p8cart.py`, `tests/fixtures/*.p8.png`, `tests/fixtures/*.lua`
+**Files:** Create `p8cart.py`, `tests/test_p8cart.py`, `tests/fixtures/*.p8.png`, `pytest.ini`
 
 **Interfaces:** Produces `rom_from_png(png: bytes) -> bytes`, `decode_code(rom: bytes) -> str`, `cart_code(png: bytes) -> str`.
 
