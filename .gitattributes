@@ -1,0 +1,2 @@
+data/games.csv -text
+tests/fixtures/* -text
