@@ -121,7 +121,6 @@ streamlit_app.py    web UI (Streamlit)
 app.py              web UI (Gradio)
 data/               the dataset and cart images
 tests/              tests and fixtures
-docs/               design notes
 ```
 
 ## Limitations
