@@ -135,6 +135,14 @@ def build(csv_path: Path = CSV_PATH) -> dict:
     return {"total": col.count(), **counts}
 
 
+def ensure_built() -> bool:
+    """Build the database if it doesn't exist yet (fresh cloud deploys). Returns True if a build ran."""
+    if COLLECTION in [c.name for c in _client().list_collections()]:
+        return False
+    build()
+    return True
+
+
 def search(query: str, k: int = 8) -> list[dict]:
     client = _client()
     if COLLECTION not in [c.name for c in client.list_collections()]:
@@ -190,9 +198,13 @@ def ask(query: str, k: int = 6) -> tuple[str, str, list[dict]]:
     return answer, extract_code(answer), sources
 
 
+def p8_text(code: str) -> str:
+    return f"pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n{code.rstrip()}\n"
+
+
 def write_p8(code: str, path) -> Path:
     path = Path(path)
-    path.write_text(f"pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n{code.rstrip()}\n", encoding="utf-8", newline="\n")
+    path.write_text(p8_text(code), encoding="utf-8", newline="\n")
     return path
 
 
