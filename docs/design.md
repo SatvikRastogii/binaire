@@ -154,7 +154,8 @@ Idempotent: re-running re-posts the follow (harmless) and re-uses the downloaded
 - **Per game** (ThreadPoolExecutor, 4 workers):
   - Thread page 1, plus pages 2..N if pagination links exist.
   - **First post:** name (thread `<title>`, HTML-unescaped), author (first non-empty
-    `uid=` link text), `cart_id` (`cartsrc_` id), license (text after `License:`, else `""`),
+    `uid=` link text), `cart_id` (`cartsrc_` id), license (text after `License:`, or the site's
+    explicit `No License` label; a row with neither fails validation),
     like count (`rate_<pid>_like` text, int), description (the post's message text,
     whitespace-normalized, excluding the cart player, the `Code ▽ | Embed ▽ | License` bar and the embed
     snippet; the exact element is pinned from fixtures during implementation).
@@ -166,9 +167,11 @@ Idempotent: re-running re-posts the follow (harmless) and re-uses the downloaded
   like_count, description, code, top_comments, thread_url, scraped_at`.
   `top_comments` is a JSON array; `scraped_at` is ISO-8601 UTC.
 - **Validation (before writing):** exactly 100 rows, unique `tid`, and non-empty `game_name`,
-  `author`, `cart_id`, `code`, with each artwork file present. Otherwise print the failing
+  `author`, `cart_id`, `license`, `code`, with each artwork file present. Otherwise print the failing
   games and exit non-zero without writing the CSV. The summary prints counts of legitimately
-  empty `license` / `description` / `top_comments`.
+  `No License` / empty `description` / empty `top_comments`.
+- Code keeps P8SCII control bytes 0x01–0x0F (print control codes, embedded data strings) as raw
+  characters, exactly as stored in the cart.
 - **Known limitation (documented in README):** Excel truncates cells over 32,767 chars, and
   some carts exceed that. The CSV itself is complete; pandas and LibreOffice read it fully.
 
