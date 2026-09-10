@@ -53,7 +53,9 @@ All checked against the live services on 2026-09-10.
   (e.g. Petal Quest: author `noelcody`, `License: CC4-BY-NC-SA`, 106 likes). Every later
   post is a comment with its own author, date, star count and text.
 - The first post references its cart as `cartsrc_<cart_id>`. The cart image is
-  `https://www.lexaloffle.com/bbs/cposts/{cart_id[:2]}/{cart_id}.p8.png`.
+  `https://www.lexaloffle.com/bbs/cposts/{cart_id[:2]}/{cart_id}.p8.png`; old numeric ids use
+  `cposts/{id // 10000}/{id}.p8.png` (the site's `get_cart_url`). The scraper takes the URL from
+  the thread page instead of computing it.
 - **Game code is not in the HTML.** It is stored inside the cart PNG and decoded
   client-side by a WASM module (`cart_tools.js`); `snippet.php` does the same, no `.p8`
   text file is served (404), and no PyPI package decodes carts.
@@ -138,7 +140,7 @@ Idempotent: re-running re-posts the follow (harmless) and re-uses the downloaded
 ### 5.2 `p8cart.py`
 - `rom_from_png(png_bytes) -> bytes` (Pillow `tobytes()` on RGBA, 0x8000 bytes).
 - `decode_code(rom) -> str`: dispatch on header (`\0pxa` / `:c:\0` / raw), then map
-  bytes → text (ASCII as-is, 0x80–0xFF via the P8SCII table, other control bytes kept as `chr`).
+  bytes → text (ASCII as-is; 0x10–0x1F, 0x7F and 0x80–0xFF via the P8SCII table; 0x00–0x0F kept as `chr`).
 - `cart_code(png_bytes) -> str` = both combined. An unknown or corrupt stream raises
   `ValueError` naming the problem.
 
@@ -223,9 +225,12 @@ Serves on `http://127.0.0.1:7860`. Errors are shown in the UI instead of crashin
 
 ## 7. Testing and verification
 
-- `tests/test_p8cart.py`: fixture PNGs for a `\0pxa` cart, a legacy `:c:` cart and a cart
-  using glyphs (e.g. `btn(⬅️)`). Decoded text must equal golden `.lua` files captured
-  from Lexaloffle's own in-browser code viewer (`snippet.php?cart_id=…&src=1`).
+- `tests/test_p8cart.py`: fixture PNGs for a `\0pxa` cart, a legacy `:c:` cart (Celeste, 15133)
+  and a glyph-heavy cart (Petal Quest). Decoded text must match fingerprints (FNV-1a of
+  non-whitespace code points, line count, non-whitespace length) captured from Lexaloffle's own
+  in-browser decoder (`snippet.php?cart_id=…&src=1`). The viewer renders tabs as 4 spaces, so
+  whitespace is excluded; fingerprints avoid golden text files that git line-ending conversion
+  could alter.
 - `tests/test_scrape.py`: saved `lister.php` HTML → 30 `(tid, title)` pairs in order. Saved
   Petal Quest thread → author `noelcody`, license `CC4-BY-NC-SA`, likes 106, `cart_id`
   `petal_quest-12`, non-empty description, 5 comments sorted by stars. A saved thread with

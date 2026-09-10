@@ -49,8 +49,8 @@
 **Interfaces:** Produces `rom_from_png(png: bytes) -> bytes`, `decode_code(rom: bytes) -> str`, `cart_code(png: bytes) -> str`.
 
 - [ ] **Step 1:** Download fixture carts: `petal_quest-12` (pxa, large), `weyubomopo-0` (pxa, small), one legacy `:c:` cart (a pre-2020 cart, e.g. from Celeste `tid=2145`), and one cart whose code uses glyphs such as `⬅️`.
-- [ ] **Step 2:** Capture golden text for each from Lexaloffle's own viewer, `https://www.lexaloffle.com/bbs/snippet.php?cart_id=<id>&src=1` (rendered in Chrome, `#output` text), and save it as `tests/fixtures/<id>.lua`. Where the viewer renders glyphs as images, check glyph positions against the P8SCII table instead.
-- [ ] **Step 3:** Write tests: `cart_code(png) == golden` for each fixture; `decode_code` raises `ValueError` on a truncated pxa stream; a raw (uncompressed) ROM round-trips.
+- [ ] **Step 2:** Capture fingerprints for each from Lexaloffle's own viewer, `https://www.lexaloffle.com/bbs/snippet.php?cart_id=<id>&src=1` (rendered in Chrome; `#output` text with `<br>` → newline): FNV-1a of non-whitespace code points, line count, non-whitespace length.
+- [ ] **Step 3:** Write tests: decoded fingerprints equal the official ones; known content snippets (including glyphs); `decode_code` raises `ValueError` on a truncated stream; raw (uncompressed) code decodes up to the first `\0`.
 - [ ] **Step 4:** Run `pytest tests/test_p8cart.py -v` → FAIL (module missing).
 - [ ] **Step 5:** Implement per design §2 "Cart PNG format" (pxa with the verified offset-width rule, legacy LUT, raw fallback, P8SCII table as a 128-entry list).
 - [ ] **Step 6:** Run the tests → PASS.
